@@ -10,7 +10,12 @@ type PredictRequest = {
 };
 
 export async function POST(req: Request) {
-  const body = (await req.json()) as PredictRequest;
+  let body: PredictRequest;
+  try {
+    body = (await req.json()) as PredictRequest;
+  } catch {
+    return NextResponse.json({ error: "Request body must be valid JSON" }, { status: 400 });
+  }
   if (!body?.image || typeof body.image !== "string") {
     return NextResponse.json({ error: "Missing 'image'" }, { status: 400 });
   }
@@ -63,11 +68,12 @@ export async function POST(req: Request) {
     }
 
     return NextResponse.json(data);
-  } catch (err: any) {
+  } catch (err: unknown) {
+    const isAbort = err instanceof DOMException && err.name === "AbortError";
     return NextResponse.json(
       {
         error: "Failed to reach YOLO service",
-        details: err?.name === "AbortError" ? "timeout" : String(err),
+        details: isAbort ? "timeout" : String(err),
         hint:
           "Start the python service: cd yolo-service; python -m uvicorn app:app --reload --port 8000",
       },

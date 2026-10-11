@@ -9,28 +9,25 @@ AI-powered waste detection and segregation.
 - **Database**: PostgreSQL, hosted on [Neon](https://neon.tech) or [Supabase](https://supabase.com) (set `DATABASE_URL`).
 - **AI service**: Python (FastAPI + YOLO) — waste detection from camera/upload, and it also exposes the `/db/*` REST API that the app uses to read and write data.
 
-Two parts run at the same time — you will need **two separate terminal windows**:
-1.  **The Web App (Next.js)**: the user interface you see in your browser.
-2.  **The AI Service (Python)**: a local service that handles waste detection **and** serves as the app's data backend (connected to PostgreSQL).
+The web app and AI/database service can be started together with one command
+after the Python dependencies and `DATABASE_URL` are configured.
 
 ## Running the Application
 
-### Step 1: Run the Web App (Terminal 1)
+### Start both services (Windows PowerShell)
 
-This starts the main application.
+From the project root:
 
-```bash
-# Install dependencies (only need to do this once)
+```powershell
 npm install
-
-# Start the web app
-npm run dev
+npm run dev:all
 ```
-After this, you can open http://localhost:9002 in your browser. You will see the app, but the AI scanner will show an "Offline" error until you complete Step 2.
 
-### Step 2: Run the AI Service (Terminal 2)
-
-This starts the local Python service that performs the AI waste detection.
+The repository-relative launcher starts Next.js and the Python service, waits
+for the YOLO model health check and database health check, and reports startup
+failures with log paths under `yolo-service/.logs/`. Press Ctrl+C to stop both
+processes. It requires `yolo-service\.venv` and a `DATABASE_URL` in the
+environment or `.env.local`.
 
 **First-Time Setup (Do this only once)**
 
@@ -63,30 +60,13 @@ If this is your first time running the project, you need to set up the Python en
     ```
     > **Note:** If you see an error related to `cv2`, `libGL.so.1`, or `libxcb.so.1` when starting the service, it means a system dependency for OpenCV is missing. This can be fixed by re-running `pip install -r requirements.txt` inside your activated virtual environment to ensure the correct "headless" version of OpenCV is used.
 
-**Start the Service (Do this every time)**
+Once setup is complete, run `npm run dev:all` from the project root.
 
-Once the first-time setup is complete, follow these steps in your second terminal to start the AI service.
-
-1.  **Navigate to the service directory (if you're not already there):**
-    ```bash
-    cd yolo-service
-    ```
-2.  **Activate the virtual environment (if it's not already active):**
-    *   On macOS/Linux:
-        ```bash
-        source .venv/bin/activate
-        ```
-    *   On Windows (PowerShell):
-        ```powershell
-        .\.venv\Scripts\Activate.ps1
-        ```
-
-3.  **Run the AI service:**
-    ```bash
-    python3 -m uvicorn app:app --reload --port 8000
-    ```
-
-Once both services are running, refresh the app at http://localhost:9002. The "AI Service Offline" message should disappear, and you can start scanning items.
+On the waste-detection page, image selection is available while the AI service
+is starting. The page checks the service automatically every five seconds and
+starts classifying the selected image as soon as the service becomes available.
+The browser cannot launch the Python process itself; `npm run dev:all` starts
+it from the local machine instead.
 
 ## Database Setup (PostgreSQL)
 

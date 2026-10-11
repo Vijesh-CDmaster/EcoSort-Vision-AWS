@@ -38,6 +38,7 @@ type ScanResult = {
 };
 
 type YoloStatus = "checking" | "online" | "offline";
+type S3UploadStatus = "idle" | "succeeded" | "not-configured" | "failed";
 
 type YoloStableVote = {
   label: string;
@@ -128,8 +129,9 @@ export function WasteScanner() {
   const { toast } = useToast();
   const [recentScans, setRecentScans] = useState<ScanResult[]>([]);
   const { addScan } = useScanStore();
-  const { detectionConfidence, enableSoundEffects, enableLiveDetection, cameraSource } = useSettingsStore();
+  const { detectionConfidence, enableSoundEffects, enableLiveDetection } = useSettingsStore();
   const [yoloStatus, setYoloStatus] = useState<YoloStatus>("checking");
+  const [s3UploadStatus, setS3UploadStatus] = useState<S3UploadStatus>("idle");
   const [showMistakeWarning, setShowMistakeWarning] = useState(false);
   const insights = useBehavioralInsights();
   const [isCameraScanning, setIsCameraScanning] = useState(false);
@@ -164,7 +166,7 @@ export function WasteScanner() {
         } else {
           setYoloStatus("offline");
         }
-      } catch (err) {
+      } catch {
         setYoloStatus("offline");
       }
     };
@@ -199,8 +201,33 @@ export function WasteScanner() {
     setResult(null);
     setLiveDetections([]);
     setShowMistakeWarning(false);
+    setS3UploadStatus("idle");
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
+    }
+  }, []);
+
+  const uploadScanImage = useCallback(async (image: string) => {
+    setS3UploadStatus("idle");
+    try {
+      const uploadRes = await fetch("/api/s3/upload", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ image }),
+      });
+      if (uploadRes.ok) {
+        setS3UploadStatus("succeeded");
+        return;
+      }
+
+      setS3UploadStatus(uploadRes.status === 503 ? "not-configured" : "failed");
+      if (uploadRes.status !== 503) {
+        const details = await uploadRes.json().catch(() => null);
+        console.warn("Waste image S3 upload failed:", details?.error ?? uploadRes.status);
+      }
+    } catch (error) {
+      setS3UploadStatus("failed");
+      console.warn("Waste image S3 upload request failed:", error);
     }
   }, []);
 
@@ -262,18 +289,7 @@ export function WasteScanner() {
         setResult(newResult);
         setRecentScans(prev => [newResult, ...prev.slice(0, 4)]);
         addScan({ source: options.source, ...newResult });
-        void fetch("/api/s3/upload", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ image: imageUrl }),
-        }).then(async (uploadRes) => {
-          if (!uploadRes.ok && uploadRes.status !== 503) {
-            const details = await uploadRes.json().catch(() => null);
-            console.warn("Waste image S3 upload failed:", details?.error ?? uploadRes.status);
-          }
-        }).catch((error) => {
-          console.warn("Waste image S3 upload request failed:", error);
-        });
+        void uploadScanImage(imageUrl);
 
         if (enableSoundEffects) {
           playSuccessSound();
@@ -305,7 +321,13 @@ export function WasteScanner() {
         setIsLoading(false);
       }
     }
-  }, [addScan, toast, detectionConfidence, enableSoundEffects, insights]);
+  }, [addScan, toast, detectionConfidence, enableSoundEffects, insights, uploadScanImage]);
+
+  useEffect(() => {
+    if (tab === "upload" && previewUrl && yoloStatus === "online" && !result && !isLoading) {
+      void handleScan(previewUrl, { source: "upload" });
+    }
+  }, [tab, previewUrl, yoloStatus, result, isLoading, handleScan]);
   
   const handleCapture = useCallback(async () => {
     if (isCameraScanning) return;
@@ -398,18 +420,7 @@ export function WasteScanner() {
       setResult(newResult);
       setRecentScans((prev) => [newResult, ...prev.slice(0, 4)]);
       addScan({ source: "camera", ...newResult });
-      void fetch("/api/s3/upload", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ image: lastFrame }),
-      }).then(async (uploadRes) => {
-        if (!uploadRes.ok && uploadRes.status !== 503) {
-          const details = await uploadRes.json().catch(() => null);
-          console.warn("Waste image S3 upload failed:", details?.error ?? uploadRes.status);
-        }
-      }).catch((error) => {
-        console.warn("Waste image S3 upload request failed:", error);
-      });
+      void uploadScanImage(lastFrame);
       if (enableSoundEffects) playSuccessSound();
       if (insights?.mostCommonMistake && insights.mostCommonMistake.item.toLowerCase() === newResult.wasteType.toLowerCase()) {
         setShowMistakeWarning(true);
@@ -424,7 +435,7 @@ export function WasteScanner() {
       setIsLoading(false);
       setIsCameraScanning(false);
     }
-  }, [captureFrame, toast, isCameraScanning, detectionConfidence, addScan, enableSoundEffects, insights, toggleCamera]);
+  }, [captureFrame, toast, isCameraScanning, detectionConfidence, addScan, enableSoundEffects, insights, toggleCamera, uploadScanImage]);
 
   useEffect(() => {
     let intervalId: NodeJS.Timeout | undefined;
@@ -487,14 +498,14 @@ export function WasteScanner() {
     );
   };
 
-  const onVideoMetadataLoaded = () => {
+  const onVideoMetadataLoaded = useCallback(() => {
     if (videoRef.current) {
       videoSizeRef.current = {
         width: videoRef.current.videoWidth,
         height: videoRef.current.videoHeight
       };
     }
-  }
+  }, [videoRef]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -504,7 +515,7 @@ export function WasteScanner() {
             video.removeEventListener('loadedmetadata', onVideoMetadataLoaded);
         }
     }
-  }, [videoRef]);
+  }, [videoRef, onVideoMetadataLoaded]);
   
   const isScanDisabled = yoloStatus !== "online";
 
@@ -529,11 +540,10 @@ export function WasteScanner() {
                 <AlertTriangle className="h-4 w-4" />
                 <AlertTitle>Action Required</AlertTitle>
                 <AlertDescription>
-                  The local AI detection service is not running. This app requires two services running at the same time. You will need **two separate terminal windows**.
+                  The local AI detection service is not ready.
                   <br/><br/>
-                  In **Terminal 1**, run the web app: `npm run dev`
-                  <br/>
-                  In **Terminal 2**, follow the steps below:
+                  From the project root, run <code>npm run dev:all</code> to
+                  start the website and Python AI/database service together.
                   <Accordion type="multiple" className="w-full mt-2" defaultValue={['item-1', 'item-2']}>
                     <AccordionItem value="item-1">
                       <AccordionTrigger className="text-sm hover:no-underline">First-Time Setup (Do this only once)</AccordionTrigger>
@@ -551,7 +561,7 @@ export function WasteScanner() {
                             <p className="mt-2 text-muted-foreground"># 4. Install dependencies</p>
                             <p>pip install -r requirements.txt</p>
                         </div>
-                        <p className="mt-2 text-xs text-muted-foreground">After setup, follow the "Start the Service" steps.</p>
+                        <p className="mt-2 text-xs text-muted-foreground">After setup, run <code>npm run dev:all</code> from the project root.</p>
                       </AccordionContent>
                     </AccordionItem>
                     <AccordionItem value="item-2" className="border-b-0">
@@ -577,7 +587,7 @@ export function WasteScanner() {
         <CardContent>
           <Tabs value={tab} onValueChange={(v) => setTab(v as "upload" | "camera")}>
             <TabsList className="grid w-full grid-cols-2">
-              <TabsTrigger value="upload" disabled={isScanDisabled}>
+              <TabsTrigger value="upload">
                 <Upload className="mr-2 h-4 w-4" /> Upload Image
               </TabsTrigger>
               <TabsTrigger value="camera" disabled={isScanDisabled || hasCameraPermission === false}>
@@ -589,12 +599,12 @@ export function WasteScanner() {
                 className={cn(
                   "mt-4 flex flex-col items-center justify-center p-8 border-2 border-dashed rounded-lg transition-colors",
                   isDragging ? "border-primary bg-accent" : "border-border",
-                  isScanDisabled ? "cursor-not-allowed bg-muted/50" : "border-border hover:border-primary/50 cursor-pointer"
+                  "border-border hover:border-primary/50 cursor-pointer"
                 )}
-                onClick={() => !isScanDisabled && fileInputRef.current?.click()}
-                onDragEnter={(e) => !isScanDisabled && handleDragEvents(e, true)}
-                onDragLeave={(e) => !isScanDisabled && handleDragEvents(e, false)}
-                onDragOver={(e) => !isScanDisabled && e.preventDefault()}
+                onClick={() => fileInputRef.current?.click()}
+                onDragEnter={(e) => handleDragEvents(e, true)}
+                onDragLeave={(e) => handleDragEvents(e, false)}
+                onDragOver={(e) => e.preventDefault()}
                 onDrop={handleDrop}
               >
                 <input
@@ -603,12 +613,11 @@ export function WasteScanner() {
                   className="hidden"
                   accept="image/*"
                   onChange={(e) => handleFileChange(e.target.files?.[0] ?? null)}
-                  disabled={isScanDisabled}
                 />
                 <div className="text-center">
                   <Upload className="w-12 h-12 mx-auto text-muted-foreground" />
                   <p className="mt-4 font-semibold">
-                    {isScanDisabled ? "AI Service Offline" : "Drag & drop or click to upload"}
+                    {isScanDisabled ? "Select an image; scanning starts when AI service is online" : "Drag & drop or click to upload"}
                   </p>
                   <p className="text-sm text-muted-foreground">
                     PNG, JPG, or WEBP files accepted.
@@ -761,7 +770,7 @@ export function WasteScanner() {
                     <AlertTriangle className="h-4 w-4" />
                     <AlertTitle>Heads Up!</AlertTitle>
                     <AlertDescription>
-                      You've commonly mistaken this item. Please double-check the sorting suggestion.
+                      You&apos;ve commonly mistaken this item. Please double-check the sorting suggestion.
                     </AlertDescription>
                   </Alert>
                 )}
@@ -789,6 +798,24 @@ export function WasteScanner() {
                       ))}
                     </ul>
                   </div>
+                )}
+                {s3UploadStatus !== "idle" && (
+                  <Alert variant={s3UploadStatus === "succeeded" ? "default" : "destructive"}>
+                    <AlertTitle>
+                      {s3UploadStatus === "succeeded"
+                        ? "Image archived to S3"
+                        : s3UploadStatus === "not-configured"
+                          ? "AWS image storage not configured"
+                          : "Image archive upload failed"}
+                    </AlertTitle>
+                    <AlertDescription>
+                      {s3UploadStatus === "succeeded"
+                        ? "The classification image was uploaded successfully."
+                        : s3UploadStatus === "not-configured"
+                          ? "Classification and scan history are still available without AWS configuration."
+                          : "Classification and scan history were saved, but the image could not be archived to S3."}
+                    </AlertDescription>
+                  </Alert>
                 )}
               </div>
             )}
