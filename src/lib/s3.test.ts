@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { PutObjectCommand } from "@aws-sdk/client-s3";
 import {
   MAX_UPLOAD_BYTES,
@@ -10,6 +10,16 @@ const onePixelPng =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 
 describe("uploadWasteImage", () => {
+  const originalRegion = process.env.AWS_REGION;
+  const originalBucket = process.env.S3_BUCKET_NAME;
+
+  afterEach(() => {
+    if (originalRegion === undefined) delete process.env.AWS_REGION;
+    else process.env.AWS_REGION = originalRegion;
+    if (originalBucket === undefined) delete process.env.S3_BUCKET_NAME;
+    else process.env.S3_BUCKET_NAME = originalBucket;
+  });
+
   it("uploads a validated image with a unique server-generated key", async () => {
     process.env.AWS_REGION = "us-east-1";
     process.env.S3_BUCKET_NAME = "test-bucket";
@@ -37,5 +47,27 @@ describe("uploadWasteImage", () => {
     );
     const oversized = `data:image/png;base64,${Buffer.alloc(MAX_UPLOAD_BYTES + 1).toString("base64")}`;
     expect(() => decodeImageDataUri(oversized)).toThrow("between 1 byte");
+  });
+
+  it("fails clearly when S3 configuration is missing", async () => {
+    delete process.env.AWS_REGION;
+    delete process.env.S3_BUCKET_NAME;
+
+    await expect(uploadWasteImage(onePixelPng)).rejects.toThrow(
+      "S3 is not configured"
+    );
+  });
+
+  it("surfaces AWS client failures without claiming success", async () => {
+    process.env.AWS_REGION = "us-east-1";
+    process.env.S3_BUCKET_NAME = "test-bucket";
+    const awsFailure = new Error("Access denied");
+    const client = {
+      send: async () => {
+        throw awsFailure;
+      },
+    };
+
+    await expect(uploadWasteImage(onePixelPng, client)).rejects.toBe(awsFailure);
   });
 });

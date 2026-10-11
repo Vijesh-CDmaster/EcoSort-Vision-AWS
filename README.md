@@ -121,6 +121,22 @@ configuration, or an IAM role) and are stored with server-side AES-256
 encryption under `waste-classifications/`. Classification still works when S3
 is not configured; the upload is skipped with a `503` configuration response.
 
+Image flow:
+
+1. [`src/components/scan/waste-scanner.tsx`](./src/components/scan/waste-scanner.tsx)
+   gets a JPEG/PNG/WebP base64 data URI from the file picker or camera and
+   sends it to [`/api/yolo/predict`](./src/app/api/yolo/predict/route.ts) for
+   classification.
+2. After a successful classification, the same data URI is sent to
+   [`/api/s3/upload`](./src/app/api/s3/upload/route.ts). The existing
+   [`src/components/scan/scan-store.tsx`](./src/components/scan/scan-store.tsx)
+   separately persists the scan result through the Python service's
+   `/db/scans` endpoint; an S3 error does not discard that existing record.
+3. The route calls [`src/lib/s3.ts`](./src/lib/s3.ts), which validates the
+   image and sends a real `PutObjectCommand` through `S3Client`. It returns
+   success only after AWS accepts the request. The route returns `502` for an
+   AWS/client failure and `503` when configuration is absent.
+
 1. Create a private S3 bucket in the AWS region you want to use. Bucket names
    are globally unique. Keep **Block all public access** enabled.
 2. Add the following values to `.env.local` (copy from `.env.example`):
@@ -152,7 +168,7 @@ is not configured; the upload is skipped with a `503` configuration response.
    variables. Do not put any of these values in frontend code or commit them.
 4. Restart the Next.js server after changing environment variables.
 
-`GET /api/s3/health` reports whether `AWS_REGION` and `S3_BUCKET_NAME` are
+[`GET /api/s3/health`](./src/app/api/s3/health/route.ts) reports whether `AWS_REGION` and `S3_BUCKET_NAME` are
 present. It intentionally reports `connectivity: "not_checked"`; it does not
 claim AWS connectivity without making an AWS request. A configured upload
 returns the S3 object key and `s3://` URI only after `PutObject` succeeds.
@@ -166,7 +182,9 @@ aws s3api head-object \
   --key waste-classifications/YYYY-MM-DD/<key-from-the-upload-response>
 ```
 
-The application test suite uses a mock S3 client and does not contact AWS:
+[`src/lib/s3.test.ts`](./src/lib/s3.test.ts) covers a successful upload with a
+mock client, invalid/oversized images, missing configuration, and AWS client
+failures. It does not contact AWS:
 
 ```bash
 npm test

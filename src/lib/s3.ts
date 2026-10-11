@@ -70,7 +70,7 @@ export function createS3Client(config: S3ClientConfig = {}): S3Client {
 
 export async function uploadWasteImage(
   image: string,
-  client: S3CommandClient = createS3Client()
+  client?: S3CommandClient
 ): Promise<S3UploadResult> {
   const config = getS3Config();
   if (!config.configured || !config.bucket || !config.region) {
@@ -78,10 +78,11 @@ export async function uploadWasteImage(
   }
 
   const decoded = decodeImageDataUri(image);
+  const s3Client = client ?? createS3Client();
   const extension = decoded.contentType.slice("image/".length).replace("jpeg", "jpg");
   const key = `waste-classifications/${new Date().toISOString().slice(0, 10)}/${randomUUID()}.${extension}`;
 
-  await client.send(
+  await s3Client.send(
     new PutObjectCommand({
       Bucket: config.bucket,
       Key: key,
