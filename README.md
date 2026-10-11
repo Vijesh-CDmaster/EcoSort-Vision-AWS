@@ -26,8 +26,9 @@ npm run dev:all
 The repository-relative launcher starts Next.js and the Python service, waits
 for the YOLO model health check and database health check, and reports startup
 failures with log paths under `yolo-service/.logs/`. Press Ctrl+C to stop both
-processes. It requires `yolo-service\.venv` and a `DATABASE_URL` in the
-environment or `.env.local`.
+processes. It creates or reuses `yolo-service\.venv` and installs Python
+dependencies only when `requirements.txt` changes. It requires a
+`DATABASE_URL` in the environment or `.env.local`.
 
 **First-Time Setup (Do this only once)**
 
@@ -60,7 +61,11 @@ If this is your first time running the project, you need to set up the Python en
     ```
     > **Note:** If you see an error related to `cv2`, `libGL.so.1`, or `libxcb.so.1` when starting the service, it means a system dependency for OpenCV is missing. This can be fixed by re-running `pip install -r requirements.txt` inside your activated virtual environment to ensure the correct "headless" version of OpenCV is used.
 
-Once setup is complete, run `npm run dev:all` from the project root.
+The first `npm run dev:all` creates the environment and installs the declared
+packages. If `YOLO_MODEL_PATH` is set, that model file must exist. Otherwise
+the backend uses its declared pretrained YOLO fallback; the launcher waits for
+`/health` and reports model download/load failures instead of claiming
+readiness.
 
 On the waste-detection page, image selection is available while the AI service
 is starting. The page checks the service automatically every five seconds and

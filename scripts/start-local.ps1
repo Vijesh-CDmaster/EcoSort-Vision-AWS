@@ -7,15 +7,55 @@ param(
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 $serviceDir = Join-Path $root "yolo-service"
-$python = Join-Path $serviceDir ".venv\Scripts\python.exe"
+$venvDir = Join-Path $serviceDir ".venv"
+$python = Join-Path $venvDir "Scripts\python.exe"
+$requirements = Join-Path $serviceDir "requirements.txt"
+$requirementsStamp = Join-Path $venvDir ".requirements.sha256"
+$defaultModel = Join-Path $serviceDir "models\yolo_model.pt"
 $logDir = Join-Path $serviceDir ".logs"
 $frontendLog = Join-Path $logDir "frontend.out.log"
 $frontendErrorLog = Join-Path $logDir "frontend.error.log"
 $backendLog = Join-Path $logDir "backend.out.log"
 $backendErrorLog = Join-Path $logDir "backend.error.log"
 
+if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
+    throw "Python is not installed or is not on PATH."
+}
+
 if (-not (Test-Path $python)) {
-    throw "Python environment is missing. Run: cd yolo-service; python -m venv .venv; .\.venv\Scripts\python.exe -m pip install -r requirements.txt"
+    Write-Host "Creating project-local Python virtual environment..."
+    & python -m venv $venvDir
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not create $venvDir"
+    }
+}
+
+$requirementsHash = (Get-FileHash -Path $requirements -Algorithm SHA256).Hash
+$installedHash = if (Test-Path $requirementsStamp) { (Get-Content $requirementsStamp -Raw).Trim() } else { "" }
+if ($requirementsHash -ne $installedHash) {
+    Write-Host "Installing or updating Python dependencies..."
+    & $python -m pip install -r $requirements
+    if ($LASTEXITCODE -ne 0) {
+        throw "Python dependency installation failed."
+    }
+    Set-Content -Path $requirementsStamp -Value $requirementsHash -NoNewline
+} else {
+    Write-Host "Python dependencies are up to date."
+}
+
+$configuredModel = $env:YOLO_MODEL_PATH
+if ($configuredModel) {
+    if (-not [System.IO.Path]::IsPathRooted($configuredModel)) {
+        $configuredModel = Join-Path $serviceDir $configuredModel
+    }
+    if (-not (Test-Path $configuredModel -PathType Leaf)) {
+        throw "YOLO_MODEL_PATH points to a missing model file: $configuredModel"
+    }
+    $env:YOLO_MODEL_PATH = $configuredModel
+} elseif (Test-Path $defaultModel -PathType Leaf) {
+    $env:YOLO_MODEL_PATH = $defaultModel
+} else {
+    Write-Warning "Custom model file is missing at $defaultModel. The backend will use its declared pretrained YOLO fallback and may download yolov8x.pt."
 }
 
 if (-not $env:DATABASE_URL -and
@@ -28,8 +68,17 @@ New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 $frontend = $null
 $backend = $null
 
+function Assert-PortAvailable($port, $name) {
+    $listener = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
+    if ($listener) {
+        throw "$name port $port is already in use (PID $($listener[0].OwningProcess)). Stop that process or choose another port."
+    }
+}
+
 function Get-Json($url) {
     try {
+        Assert-PortAvailable $FrontendPort "Frontend"
+        Assert-PortAvailable $BackendPort "Python service"
         $response = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 5
         return ($response.Content | ConvertFrom-Json)
     } catch {
