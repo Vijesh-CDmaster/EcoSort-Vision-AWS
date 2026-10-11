@@ -262,6 +262,18 @@ export function WasteScanner() {
         setResult(newResult);
         setRecentScans(prev => [newResult, ...prev.slice(0, 4)]);
         addScan({ source: options.source, ...newResult });
+        void fetch("/api/s3/upload", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ image: imageUrl }),
+        }).then(async (uploadRes) => {
+          if (!uploadRes.ok && uploadRes.status !== 503) {
+            const details = await uploadRes.json().catch(() => null);
+            console.warn("Waste image S3 upload failed:", details?.error ?? uploadRes.status);
+          }
+        }).catch((error) => {
+          console.warn("Waste image S3 upload request failed:", error);
+        });
 
         if (enableSoundEffects) {
           playSuccessSound();
@@ -386,6 +398,18 @@ export function WasteScanner() {
       setResult(newResult);
       setRecentScans((prev) => [newResult, ...prev.slice(0, 4)]);
       addScan({ source: "camera", ...newResult });
+      void fetch("/api/s3/upload", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ image: lastFrame }),
+      }).then(async (uploadRes) => {
+        if (!uploadRes.ok && uploadRes.status !== 503) {
+          const details = await uploadRes.json().catch(() => null);
+          console.warn("Waste image S3 upload failed:", details?.error ?? uploadRes.status);
+        }
+      }).catch((error) => {
+        console.warn("Waste image S3 upload request failed:", error);
+      });
       if (enableSoundEffects) playSuccessSound();
       if (insights?.mostCommonMistake && insights.mostCommonMistake.item.toLowerCase() === newResult.wasteType.toLowerCase()) {
         setShowMistakeWarning(true);

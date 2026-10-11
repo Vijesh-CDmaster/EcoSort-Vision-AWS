@@ -112,5 +112,65 @@ The app stores its data in PostgreSQL (users, products, orders, messages, scans,
 
 > **Note:** the old local SQLite file (`yolo-service/ecosort.db`) is no longer used. Data lives in your hosted database, so it survives restarts and is shared across machines.
 
+## Optional Amazon S3 image storage
+
+Completed waste scans are uploaded by the Next.js server to S3 when S3 is
+configured. The browser never receives AWS credentials. Uploads use the AWS
+SDK's standard credential provider chain (environment variables, shared AWS
+configuration, or an IAM role) and are stored with server-side AES-256
+encryption under `waste-classifications/`. Classification still works when S3
+is not configured; the upload is skipped with a `503` configuration response.
+
+1. Create a private S3 bucket in the AWS region you want to use. Bucket names
+   are globally unique. Keep **Block all public access** enabled.
+2. Add the following values to `.env.local` (copy from `.env.example`):
+
+   ```text
+   AWS_REGION=us-east-1
+   S3_BUCKET_NAME=your-unique-private-bucket-name
+   ```
+
+3. Give the runtime identity only the ability to upload to the prefix used by
+   this application. Replace the bucket name in this example IAM policy:
+
+   ```json
+   {
+     "Version": "2012-10-17",
+     "Statement": [
+       {
+         "Effect": "Allow",
+         "Action": ["s3:PutObject"],
+         "Resource": "arn:aws:s3:::your-unique-private-bucket-name/waste-classifications/*"
+       }
+     ]
+   }
+   ```
+
+   Use an IAM role when running on AWS. For local development, use a profile
+   configured with `aws configure` or the standard `AWS_ACCESS_KEY_ID`,
+   `AWS_SECRET_ACCESS_KEY`, and optional `AWS_SESSION_TOKEN` environment
+   variables. Do not put any of these values in frontend code or commit them.
+4. Restart the Next.js server after changing environment variables.
+
+`GET /api/s3/health` reports whether `AWS_REGION` and `S3_BUCKET_NAME` are
+present. It intentionally reports `connectivity: "not_checked"`; it does not
+claim AWS connectivity without making an AWS request. A configured upload
+returns the S3 object key and `s3://` URI only after `PutObject` succeeds.
+
+To verify a real upload, start the app with valid AWS configuration and
+credentials, complete an image scan in the UI, then check the private bucket:
+
+```bash
+aws s3api head-object \
+  --bucket your-unique-private-bucket-name \
+  --key waste-classifications/YYYY-MM-DD/<key-from-the-upload-response>
+```
+
+The application test suite uses a mock S3 client and does not contact AWS:
+
+```bash
+npm test
+```
+
     
     
